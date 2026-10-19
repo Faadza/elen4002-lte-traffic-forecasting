@@ -1,0 +1,27 @@
+{
+  "code_sha256": {
+    "__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "prepare.py": "e2bdbbd5e77024e3105a16d8b530418f66c40619f836b129a2bcd518654c34c2",
+    "select_cells.py": "69b5c6d2d400407a7778f987d42cb94961aee7a77ffb14f9d8303a98f22577c7",
+    "splits.py": "09d7c5e0dd416e1d88f8edc43b9bba8d31f12fd8790890cf6143ecd3128938a5",
+    "validate_data.py": "8a2707c72d817ec10dbc1d3d9e4b6cf5ef703859b6910f56552a537732d25ae8",
+    "windows.py": "542d59315d72420798a04f38d85727354e04d4bfb70cb575ae1382d5cccb57e2"
+  },
+  "config_sha256": "68bd3c36778c0790e3c8ed09aed10fa3c29369a7d558f5d044c35a2170193ab0",
+  "files": {
+    "coverage.csv": "d388fcd828280d074ad8eea7f20fa99a851aab2ead37df04fa732064c53c5ee4",
+    "data_manifest.json": "4b1c1682731184bab244702fa88db0bfbe65c69368b1ec01a5673dacfc4f0177",
+    "development_days.csv": "984683468046aa35c4cf95d3778643b90be57f6035d7d2e1a1245274836ae0ac",
+    "development_prefixes.csv": "f1de622bccf05edb66e92d34fa89eb0147f4c63d974e704812f6412608147a7c",
+    "development_variation.csv": "b5df1a1a59adc2bce746158aa3f65a97dead4ac92ca1ff8d039fb29cbb151ffb",
+    "early_cells.csv": "8094d568d1b2c138412f7385607cde54b4e3a799d392d195c23745e0f8e61ed4",
+    "eligible_cells.csv": "1be54ed60c5ed5dc63ab4bbe8de011994e0f5a61416b379bfbe44ee9f78acf35",
+    "hourly.csv": "84dc5925446f87098260836ca69d565285a95162e05376633c9a214598154901",
+    "missing_runs.csv": "cd6a0e4059b476295ed9e30158d5881f20e62c45759be5cb94c172c3e5ff9d72",
+    "tuning_cells.csv": "acad96eaf2ef71af288ce994dc7373621ae29ab41ccebca60fc855e715d88937",
+    "validation_report.json": "3687c8acf7fa3d1fc50cc3a9f938490b5aa43e0d9581d39c7bf63953a045ce55"
+  },
+  "runtime_config_sha256": "421a4a6742cec01bde5a756927db9cca7fcf76efb683e040e3b0f2e4f2fe5911",
+  "schema_version": 1,
+  "source_sha256": "2578a993553c0f21b00a5d2ae9cd84312bc33d692b0df00dc789016892f6c872"
+}

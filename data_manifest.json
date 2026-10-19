@@ -1,0 +1,24 @@
+{
+  "dataset": "Predict traffic of LTE network",
+  "source_url": "https://www.kaggle.com/datasets/jayusx/predict-traffic-of-lte-network",
+  "original_source": "https://www.kaggle.com/datasets/naebolo/predict-traffic-of-lte-network (no longer available)",
+  "download_date": "2026-09-07",
+  "sha256": "2578a993553c0f21b00a5d2ae9cd84312bc33d692b0df00dc789016892f6c872",
+  "records_after_dedup": 497544,
+  "cells": 57,
+  "date_range": "2017-10-23 00:00:00 to 2018-10-22 23:00:00",
+  "traffic_units": "to confirm from the data description in Alekseeva et al. (2021) before final reporting",
+  "usage_terms": "the reupload page states no licence; original dataset was public on Kaggle; used for coursework analysis only, raw file not redistributed",
+  "current_metadata_review": {
+    "date": "2026-10-04",
+    "historical_fields": "Original acquisition/source claims retained verbatim; not all currently independently verified.",
+    "source_availability": "Original URLs inaccessible to retrieval; permanent deletion not established.",
+    "traffic_units": "dataset traffic units; no verified physical conversion",
+    "timezone": null,
+    "hourly_interval_label": "start/end unspecified; use consistent recorded ordering",
+    "reporting_latency": "unknown; assume preceding observations available at forecast origin",
+    "licence": "not independently verified; article licence is not dataset licence",
+    "context_reference": "Alekseeva et al. IEEE Access 2021, DOI10.1109/ACCESS.2021.3129850",
+    "hourly_definition_reference": "Alekseeva et al. Telecom IT2021, DOI10.31854/2307-1303-2021-9-1-1-12"
+  }
+}

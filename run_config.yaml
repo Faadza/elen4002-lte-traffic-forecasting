@@ -1,0 +1,373 @@
+# Scientific settings for data preparation and forecasting.
+schema_version: '1.1'
+task:
+  horizon_hours: 1
+  unit: individual LTE cell
+  target: recorded nonnegative hourly traffic level
+  other_cells_or_external_predictors: false
+  models:
+  - persistence
+  - daily_seasonal_naive
+  - weekly_seasonal_naive
+  - ridge
+  - direct_lightgbm
+  - ridge_lightgbm_hybrid
+  - lstm
+data:
+  raw_sha256: 2578a993553c0f21b00a5d2ae9cd84312bc33d692b0df00dc789016892f6c872
+  raw_file: null
+  units: dataset traffic units; physical conversion unverified
+  timezone: null
+  calendar_hours_provisional: 8760
+  deduplicate: exact duplicates in working copy only; reject conflicting keys
+  input_fill:
+    method: causal carry-forward first missing positions; genuine observations reset counter
+    maximum_hours_provisional: 3
+    development_check_caps:
+    - 0
+    - 1
+    - 3
+    leading_missing: unresolved
+    counter_continues_across_splits: true
+    targets_imputed: false
+    development_review: Retain cap 3 as a bounded engineering choice; missing-value accuracy is not established;
+      see data-validation report.
+  history_hours: 168
+  require_complete_prepared_history: true
+  require_observed_scoring_and_training_target: true
+  masks_independent_of_model_outputs: true
+chronology:
+  basis: complete hourly calendar before filtering; half-open intervals
+  development:
+  - 0
+  - 6132
+  confirmation:
+  - 6132
+  - 7446
+  final_test:
+  - 7446
+  - 8760
+  final_fit:
+  - 0
+  - 7446
+  folds:
+  - fit:
+    - 0
+    - 4116
+    score:
+    - 4116
+    - 4788
+  - fit:
+    - 0
+    - 4788
+    score:
+    - 4788
+    - 5460
+  - fit:
+    - 0
+    - 5460
+    score:
+    - 5460
+    - 6132
+  retrain_inside_score_block: false
+  advance_history_with_available_observations: true
+  confirmation_redesign: relabel as additional development
+  final_result_driven_redesign: requires new independent evaluation evidence
+eligibility:
+  main_selection_prefix:
+  - 0
+  - 6132
+  technical_requirements:
+  - at least one usable supervised fitting window
+  - finite strictly positive observed fitting SD
+  - at least one observed weekly pair and strictly positive weekly MASE denominator
+  arbitrary_observed_fraction_cutoff: null
+  insufficient_evidence: data coverage/count review before modelling; computability is not sufficient
+    quality
+  zero_scale: explicit unavailable status, no epsilon; retain valid original-unit diagnostics
+  no_evaluation_targets: unavailable for all methods that period; disclose contributor counts
+  model_failure: does not change mask or remove cell/seed; candidate/block incomplete
+tuning_panel:
+  selection_prefix:
+  - 0
+  - 4116
+  maximum_cells: 9
+  technical_rules: same computability requirements in early prefix; also check LSTM inner fit/tail and
+    all development scoring masks before tuning
+  selection_statistic: observed population SD divided by observed mean
+  quantiles:
+  - 0.1
+  - 0.2
+  - 0.3
+  - 0.4
+  - 0.5
+  - 0.6
+  - 0.7
+  - 0.8
+  - 0.9
+  quantile_method: linear
+  selection: nearest unused cell, ascending quantiles, lexicographic cell-ID ties
+  fewer_than_nine: use all technically eligible cells; disclose
+  structurally_unscoreable_fold: resolve using development data before candidate fitting; log any amended
+    panel; no result-based replacement
+  ids:
+  - Cell_003791
+  - Cell_000233
+  - Cell_001792
+  - Cell_001791
+  - Cell_007371
+  - Cell_001033
+  - Cell_039871
+  - Cell_000112
+  - Cell_001912
+features:
+  traffic_lags: 168
+  original_missing_flags: 168
+  calendar:
+  - sin(2*pi*hour/24)
+  - cos(2*pi*hour/24)
+  - sin(2*pi*hour_of_week/168)
+  - cos(2*pi*hour_of_week/168)
+  weekday_origin: Monday=0; clock interpretation subject to data validation
+  tabular_count: 340
+  lstm_sequence_shape:
+  - 168
+  - 2
+  lstm_calendar_at_output_head: 4
+  scaling:
+    mean_and_sd: unique genuine observed hours in current fitting prefix; population SD ddof=0
+    same_pair_for_all_traffic_lags_and_targets: true
+    flags_and_calendar_unchanged: true
+    freeze_inside_evaluation_block: true
+    inner_lstm_scaler: inner fitting segment only
+    inverse: mu + sigma * z
+    zero_sd: explicit invalid status; no silent fallback
+  final_prediction: check finite; combine hybrid in z units; inverse once; max(0, raw_original_units)
+  retain_raw_predictions: true
+  clip_residual_or_standardized_intermediate: false
+  upper_bound: null
+  integer_rounding: false
+selection:
+  metric: equal-cell mean weekly MASE within fold, then equal mean of three fold scores
+  lstm_seed_aggregation: compute score per seed, arithmetic mean within cell, then equal cell/fold means
+  ridge_first: true
+  direct_and_residual_tuned_independently: true
+  scores_use_final_zero_bounded_predictions: true
+  exact_ties:
+    ridge: larger alpha
+    direct: fewer trees then fewer leaves
+    hybrid: lambda=0 first when tied for best, else fewer trees then fewer leaves then smaller lambda
+    lstm: fewer hidden units then lower dropout
+  rounding_before_tie_detection: false
+models:
+  ridge:
+    alphas:
+    - 0.1
+    - 1
+    - 10
+    - 100
+    - 1000
+    fit_intercept: true
+    intercept_penalized: false
+    solver: svd
+    objective: sum squared residuals + alpha * squared coefficient norm
+  trees:
+    tree_counts:
+    - 32
+    - 128
+    - 512
+    leaf_caps:
+    - 7
+    - 31
+    objective: squared_error
+    learning_rate: 0.05
+    min_data_in_leaf: 48
+    lambda_l2: 1.0
+    boosting_type: gbdt
+    device_type: cpu
+    deterministic: true
+    force_col_wise: true
+    feature_fraction: 1.0
+    bagging_fraction: 1.0
+    bagging_freq: 0
+    seed: 2026
+    automatic_capacity_extension: false
+    remaining_library_defaults: record exact installed-version defaults during environment setup
+  hybrid:
+    base: reuse selected ridge configuration and fitted predictions
+    residual_target: z_actual - unclipped ridge fitted z prediction on eligible training rows
+    residual_cross_fitting: false
+    residual_extra_centering: false
+    weights:
+    - 0
+    - 0.25
+    - 0.5
+    - 0.75
+    - 1
+    weight_global_and_fixed: true
+    lambda_zero: ridge preferred, not successful hybridisation; no correction model needed
+    capacity_curve: direct vs residual at matched trees/leaves with lambda=1; selected weighted hybrid
+      separate
+    ablation: lambda=1 with selected component settings; reuse outputs where already present
+  lstm:
+    layers: 1
+    hidden_units:
+    - 16
+    - 32
+    output_dropout:
+    - 0.0
+    - 0.2
+    head: last hidden state -> dropout -> concatenate 4 calendar values -> linear scalar
+    stateless_windows: true
+    shuffle_windows: false
+    optimizer: Adam
+    learning_rate: 0.001
+    batch_size: 32
+    training_loss: MSE in standardised units
+    maximum_epochs: 100
+    seeds_all_formal_periods:
+    - 2026
+    - 2027
+    - 2028
+    inner_stopping_tail_hours: 336
+    inner_stopping_metric: MAE after inverse transform and final lower bound on eligible observed tail
+      targets
+    patience_epochs: 10
+    improvement: strictly lower score; earliest best epoch on tie
+    refit: reinitialise same seed; fit scaler/model on full permitted prefix for best inner epoch count
+    confirmation_final_epochs: ceil(median(selected-architecture best epochs across development cells/folds/seeds))
+    confirmation_final_early_stopping: false
+    prediction_ensemble: false
+    remaining_library_defaults: record exact installed-version defaults during environment setup
+metrics:
+  primary: equal_cell_mean_weekly_MASE
+  mase_lag: 168
+  mase_denominator: mean absolute observed lag-168 differences entirely within current fitting prefix;
+    shared per cell across methods
+  zero_mase_scale: undefined, no epsilon; disclose common exclusion and valid original-unit results
+  supporting:
+  - MAE
+  - RMSE
+  - per_cell_scores
+  - fraction_cells_improved
+  - daily_busiest_hour_absolute_error
+  - daily_busiest_hour_signed_error
+  - coverage
+  - clipping_frequency_and_mean_adjustment
+  signed_error: prediction minus actual
+  busiest_hour: complete observed calendar days; actual daily maximum; average ties then days within cell;
+    if maximum lacks common forecast eligibility exclude day, no substitute or imputed maximum
+  lstm_rmse: RMSE separately per seed before averaging
+primary_comparator:
+  select_on: confirmation
+  candidates:
+  - persistence
+  - daily_seasonal_naive
+  - weekly_seasonal_naive
+  - ridge
+  - direct_lightgbm
+  - lstm
+  criterion: lowest macro MASE at full stored precision
+  exact_tie: lower measured median common-workload single-origin latency; unavailable/tied latency uses
+    candidate order
+  freeze_before_final: true
+  always_report_all_methods: true
+uncertainty:
+  statistic: hybrid minus frozen primary comparator macro MASE
+  scope: final primary comparison; approximate conditional interval, no success/significance gate
+  confidence_level: 0.95
+  replicates: 2000
+  seed: 20260928
+  primary_block_hours: 168
+  sensitivity_block_hours: 336
+  sampling: uniform nonwrapping starts 0..N-L; concatenate ceil(N/L) blocks then truncate to N
+  joint_over:
+  - cells
+  - models
+  - LSTM seeds
+  resample_complete_calendar_before_masks: true
+  resample_seeds_or_cells_independently: false
+  refit_models: false
+  denominators_fixed: true
+  recompute_seed_scores_then_cell_means: true
+  percentiles:
+  - 0.025
+  - 0.975
+  quantile_method: linear
+  undefined_replicate: record count, mark interval unavailable at that block size, preserve ordinary point
+    metrics; no redraw/drop-cell
+  development_checks: paired loss plots and autocorrelation; report nonstationarity/dependence/block sensitivity;
+    no guaranteed 95 percent coverage
+costs:
+  device: same recorded CPU machine
+  threads_per_process: 1
+  cells_sequential: true
+  concurrent_experiment_workers: false
+  precision: float64 tabular/ridge processing; float32 LSTM; record actual library use
+  fit_boundary: raw arrays in memory and imports complete; include features/scaler and complete selected
+    fit; exclude disk loading/export/plots/search
+  deterministic_fit_repetitions: 3
+  lstm_fit_repetitions: three required seed fits; no extra repeats solely for timing
+  fit_summary:
+  - each observation
+  - median
+  - range
+  hybrid_fit_includes_ridge: true
+  prediction_boundary: loaded models; include input construction/scaling/all model stages/inversion/lower
+    bound; exclude loading/export/plots
+  batch_prediction: one warmup plus three timed passes on identical eligible targets
+  single_origin_latency:
+    origins: up to 100 evenly spaced unique origins with valid history for all measured cells; mask-based
+      selection
+    warmup_passes: 1
+    timed_passes: 3
+    summary:
+    - median
+    - empirical 95th percentile
+    - origin count
+    - cell count
+    no_common_origins: workload unavailable; do not shrink panel silently
+  memory: fresh worker peak process RSS separately for fit/predict; include dependencies/data; verify
+    platform units
+  artifact_size: one deployed model per cell plus scalers/configuration; no predictions/data/extra experimental
+    seeds
+  tuning_cost: separate actual totals
+  lstm_deployment: one seed model per cell, not a three-seed ensemble
+  profile_freeze: environment setup and pilot before formal comparisons; record practical amendments
+failures:
+  candidate: incomplete candidates cannot win on successful subsets
+  interrupted_run: repeat identical configuration and seed; retain logs
+  bug: repair and consistently rerun affected comparisons
+  persistent_family_failure: resolve/disclose incomplete seven-method comparison before comparator freeze
+  final_failure: no substitute seed/comparator or target pruning
+adaptation:
+  initial_search: finite grids above; keep all outcomes
+  boundary_optimum: diagnostic, not automatic expansion
+  planned_rounds_before_review: 1
+  round_budget: diagnose and declare finite changes/run count before execution
+  further_redesign: substantive user review
+  criteria: accuracy, cost, cell/fold consistency; no fixed percent, fold-majority or significance gate
+  weak_hybrid: review before confirmation; persistent worse error and higher cost or lambda=0 is evidence
+    against candidate
+scope_limits:
+- no required or aspirational improvement percentage
+- no guaranteed positive outcome or novelty
+- no formal equivalence claim from close errors
+- no broad superiority over neural forecasting or industry practice
+- no ARIMA/SARIMA current module; possible future work
+- synthetic generation omitted under reported supervisor condition
+- earlier whole-year illustration exposure disclosed
+workload_upper_bounds:
+  K_tuning_cells_max: 9
+  C_source_cells: 57
+  initial_tabular_development_fits: 51*K = 459 at K=9
+  initial_lstm_development_fits: 72*K = 648 at K=9
+  lstm_confirmation_and_final_fits: 6*C = 342 at C=57
+  lstm_total_example: 990
+  maximum_lstm_fit_epochs_example: 99000
+  excludes:
+  - pilot
+  - adaptation
+  - deterministic timing repetitions
+  - failure retries
+  runtime_verified: false
