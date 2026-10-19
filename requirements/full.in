@@ -1,0 +1,4 @@
+# For generating platform locks; install a platform lock, not this input file.
+-r core.in
+torch==2.9.1
+pip==25.0.1

@@ -1,0 +1,38 @@
+# Local environments and generated Python files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.DS_Store
+
+# Credentials and local editor/runtime settings
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.vscode/
+
+# Private research inputs and execution archives
+data/raw/
+data/processed/
+results/
+private/
+context/
+attachments/
+sources/
+reports/
+*.pkl
+*.joblib
+*.pt
+*.pth
+*.keras
+*.zip
+
+# Machine-specific installation and check outputs
+install-report.json
+environment-check*.json
+local-checks/
