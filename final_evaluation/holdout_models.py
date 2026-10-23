@@ -10,11 +10,14 @@ import json
 from pathlib import Path
 from time import perf_counter_ns
 
+import numpy as np
+
 from blend_revision.model import (BlendModel, FROZEN_TREE_PARAMETERS,
                                   checked_model, fit_blend, load_blend,
                                   predict_blend, save_blend)
 from forecasting.data import fit_scaler, make_examples, scaled_targets, tabular_inputs
-from forecasting.pilot_models import (PilotModel, _prefix, load_model,
+from forecasting.lstm_training import fit_fixed_epochs
+from forecasting.pilot_models import (BASELINES, PilotModel, _prefix, load_model,
                                       model_fingerprint, predict_model, save_model)
 from models.hybrid import fit_correction
 from models.lightgbm import build_parameters, fit_lightgbm
@@ -23,11 +26,13 @@ from preprocessing.splits import LOOKBACK
 
 BLEND_METHOD = "ridge_direct_lightgbm_blend"
 ORIGINAL_HYBRID = "ridge_lightgbm_hybrid"
-METHODS = ("ridge", "direct_lightgbm", ORIGINAL_HYBRID, BLEND_METHOD)
+METHODS = (*BASELINES, "ridge", "direct_lightgbm", ORIGINAL_HYBRID, BLEND_METHOD, "lstm")
 RIDGE_ALPHA = 1000
 DIRECT_TREES, DIRECT_LEAVES = 128, 7
 RESIDUAL_TREES, RESIDUAL_LEAVES, RESIDUAL_WEIGHT = 32, 31, 1.0
 RIDGE_WEIGHT = .2
+LSTM_HIDDEN, LSTM_DROPOUT, LSTM_EPOCHS = 32, .2, 23
+LSTM_SEEDS = (2026, 2027, 2028)
 FIT_SCOPE = (
     "Loaded arrays to fitted model: prefix slicing, scaler and feature construction, "
     "fresh complete fitting including every hybrid component; excludes disk I/O, "
@@ -38,8 +43,14 @@ FIT_SCOPE = (
 def _selected_arguments(method, config, seed):
     if method not in METHODS:
         raise ValueError(f"Unknown frozen method: {method!r}")
-    if seed is not None:
-        raise ValueError("These frozen methods do not accept a seed argument")
+    if method == "lstm":
+        if (isinstance(seed, (bool, np.bool_)) or not isinstance(seed, (int, np.integer))
+                or seed not in LSTM_SEEDS):
+            raise ValueError("LSTM requires one explicit frozen seed: 2026, 2027 or 2028")
+    elif seed is not None:
+        raise ValueError("Only LSTM accepts a seed argument")
+    if method in BASELINES:
+        return
     models = config["models"]
     if method in ("ridge", ORIGINAL_HYBRID, BLEND_METHOD):
         ridge = models["ridge"]
@@ -58,6 +69,13 @@ def _selected_arguments(method, config, seed):
             raise ValueError("Tree parameters differ from the frozen squared-error configuration")
     if method == ORIGINAL_HYBRID and RESIDUAL_WEIGHT not in models["hybrid"]["weights"]:
         raise ValueError("Frozen original hybrid requires full residual correction weight1")
+    if method == "lstm":
+        spec = models["lstm"]
+        if (LSTM_HIDDEN not in spec["hidden_units"] or LSTM_DROPOUT not in spec["output_dropout"]
+                or tuple(spec["seeds_all_formal_periods"]) != LSTM_SEEDS
+                or spec.get("confirmation_final_early_stopping") is not False
+                or spec["maximum_epochs"] < LSTM_EPOCHS):
+            raise ValueError("LSTM requires the frozen architecture, seeds and fixed23 epochs")
 
 
 def _fit_complete(method, values, observed, timestamps, fit_end, config, seed, progress):
@@ -67,10 +85,25 @@ def _fit_complete(method, values, observed, timestamps, fit_end, config, seed, p
     metadata = {"fit_interval": [0, int(fit_end)],
                 "candidate_selection": "frozen development-selected configuration",
                 "cached_component_reused": False}
+    if method in BASELINES:
+        settings["lag"] = BASELINES[method][1]
+        return PilotModel(method, None, None, settings, {**metadata, "component_fit_counts": {}})
     if method == BLEND_METHOD:
         # fit_blend creates one shared feature/scaler representation and fits
         # BOTH independent predictors afresh within this timing boundary.
         return fit_blend(past, flags, clock, fit_end, config, ridge_weight=RIDGE_WEIGHT)
+    if method == "lstm":
+        spec = config["models"]["lstm"]
+        fitted = fit_fixed_epochs(past, flags, clock, fit_end,
+                                  hidden_units=LSTM_HIDDEN, dropout=LSTM_DROPOUT,
+                                  seed=seed, settings=spec, epochs=LSTM_EPOCHS,
+                                  progress=progress)
+        fitted.model.eval()
+        settings.update(hidden_units=LSTM_HIDDEN, dropout=LSTM_DROPOUT, seed=int(seed),
+                        batch_size=int(spec["batch_size"]), selected_epochs=LSTM_EPOCHS,
+                        training_target_count=int(fitted.metadata["fit_count"]))
+        return PilotModel(method, fitted.model, fitted.scaler, settings,
+                          {**metadata, **fitted.metadata})
 
     scaler = fit_scaler(past, flags, fit_end)
     examples = make_examples(past, flags, clock, 0, fit_end)
@@ -108,7 +141,7 @@ def fit_selected(method, values, observed, timestamps, fit_end, config, seed=Non
 
     There is no cached ridge dependency and no early stopping or reselection.
     One call means one complete selected fitting procedure; the experiment
-    driver schedules deterministic repeats.
+    driver schedules deterministic repeats and the three separate LSTM seeds.
     """
     _selected_arguments(method, config, seed)
     start = perf_counter_ns()
@@ -147,6 +180,10 @@ def _checked_selected(bundle):
     method, settings = bundle.method, bundle.settings
     if settings.get("lookback") != LOOKBACK:
         raise ValueError("Selected model has an incompatible feature schema")
+    if method in BASELINES:
+        if settings.get("lag") != BASELINES[method][1] or bundle.model is not None or bundle.scaler is not None:
+            raise ValueError("Baseline payload differs from its fixed forecasting rule")
+        return bundle
     if bundle.scaler is None or settings.get("fit_end") != bundle.scaler.fit_end:
         raise ValueError("Selected model has an inconsistent fitting prefix")
     if method in ("ridge", ORIGINAL_HYBRID):
@@ -170,6 +207,12 @@ def _checked_selected(bundle):
             raise ValueError("Selected tree count exceeds its frozen round budget")
         if method == ORIGINAL_HYBRID and settings.get("weight") != RESIDUAL_WEIGHT:
             raise ValueError("Original hybrid requires full residual correction weight1")
+    if method == "lstm":
+        if (settings.get("hidden_units") != LSTM_HIDDEN or settings.get("dropout") != LSTM_DROPOUT
+                or settings.get("selected_epochs") != LSTM_EPOCHS or settings.get("seed") not in LSTM_SEEDS
+                or settings.get("batch_size") != 32
+                or bundle.model.hidden_units != LSTM_HIDDEN or bundle.model.output_dropout != LSTM_DROPOUT):
+            raise ValueError("Selected LSTM differs from the frozen architecture, seed or epochs")
     return bundle
 
 

@@ -32,7 +32,8 @@ def invented():
 @pytest.fixture(scope="module")
 def fitted(invented):
     config, values, observed, clock, end = invented
-    return {method: selected.fit_selected(method, values, observed, clock, end, config)
+    return {method: selected.fit_selected(method, values, observed, clock, end, config,
+                                          seed=2026 if method == "lstm" else None)
             for method in selected.METHODS}
 
 
@@ -46,7 +47,7 @@ def test_complete_fit_roundtrip_and_single_origin_equivalence(invented, fitted, 
     np.testing.assert_array_equal(expected[1], np.maximum(0, expected[0]))
     singles = np.array([selected.predict_selected(bundle, values, observed, clock, [int(t)])[0][0]
                         for t in targets])
-    tolerance = 1e-12
+    tolerance = 1e-5 if method == "lstm" else 1e-12
     np.testing.assert_allclose(singles, expected[0], rtol=tolerance, atol=tolerance)
     saved = selected.save_selected(bundle, tmp_path / method)
     restored = selected.load_selected(saved)
@@ -72,13 +73,14 @@ def test_current_and_future_targets_never_enter_prediction(invented, fitted, met
 
 
 @pytest.mark.parametrize("method", ["ridge", "direct_lightgbm", selected.ORIGINAL_HYBRID,
-                                     selected.BLEND_METHOD])
+                                     selected.BLEND_METHOD, "lstm"])
 def test_later_values_physically_excluded_from_all_learned_fits(invented, fitted, method):
     config, values, observed, clock, end = invented
     poison, flags = values.copy(), observed.astype(int)
     poison[end:], flags[end:] = np.inf, 99
     config_before = copy.deepcopy(config)
-    refit, stats = selected.fit_selected(method, poison, flags, clock, end, config)
+    refit, stats = selected.fit_selected(method, poison, flags, clock, end, config,
+                                        seed=2026 if method == "lstm" else None)
     assert selected.selected_fingerprint(refit) == selected.selected_fingerprint(fitted[method][0])
     assert config == config_before
     assert np.isinf(poison[end:]).all() and (flags[end:] == 99).all()
@@ -178,7 +180,29 @@ def test_blend_feature_and_both_fits_are_inside_one_timer(invented):
     assert stats["fit_seconds"] == 1e-7
 
 
-@pytest.mark.parametrize("method,seed", [("ridge", 2026), ("unknown", None)])
+def test_lstm_runs_exactly23_epochs_without_inner_selection(invented, fitted):
+    bundle, stats = fitted["lstm"]
+    assert bundle.settings["selected_epochs"] == 23
+    assert bundle.settings["hidden_units"] == 32
+    assert bundle.settings["dropout"] == .2
+    assert stats["early_stopping"] is False
+    assert stats["component_fit_counts"] == {"full_prefix_fit": 1}
+    assert [row["epoch"] for row in stats["history"]] == list(range(1, 24))
+    assert not any("tail" in key or "selection" in key for key in stats if key != "candidate_selection")
+    assert stats["fit_count"] == bundle.settings["training_target_count"]
+
+
+@pytest.mark.parametrize("seed", selected.LSTM_SEEDS)
+def test_every_declared_seed_uses_identical_frozen_architecture_and_epochs(invented, fitted, seed):
+    config, values, observed, clock, end = invented
+    # Spy on routing without three redundant full numerical fits in this test.
+    with patch.object(selected, "_fit_complete", return_value=fitted["lstm"][0]) as fit:
+        selected.fit_selected("lstm", values, observed, clock, end, config, seed=seed)
+    assert fit.call_args.args[6] == seed
+
+
+@pytest.mark.parametrize("method,seed", [("lstm", None), ("lstm", 2029), ("lstm", True),
+                                         ("ridge", 2026), ("unknown", None)])
 def test_invalid_methods_and_seeds_rejected_before_fitting(invented, method, seed):
     config, values, observed, clock, end = invented
     with patch.object(selected, "_fit_complete") as fitting, pytest.raises(ValueError):
@@ -189,7 +213,7 @@ def test_invalid_methods_and_seeds_rejected_before_fitting(invented, method, see
 @pytest.mark.parametrize("method,change", [("direct_lightgbm", "objective"),
                                             (selected.ORIGINAL_HYBRID, "capacity"),
                                             (selected.BLEND_METHOD, "learning_rate"),
-                                            ("ridge", "alpha")])
+                                            ("ridge", "alpha"), ("lstm", "early_stopping")])
 def test_changed_scientific_settings_fail_before_any_fit(invented, method, change):
     config, values, observed, clock, end = invented
     bad = copy.deepcopy(config)
@@ -201,13 +225,17 @@ def test_changed_scientific_settings_fail_before_any_fit(invented, method, chang
         bad["models"]["trees"]["learning_rate"] = .1
     elif change == "alpha":
         bad["models"]["ridge"]["alphas"] = [1]
+    else:
+        bad["models"]["lstm"]["confirmation_final_early_stopping"] = True
     with patch.object(selected, "_fit_complete") as fitting, pytest.raises(ValueError):
-        selected.fit_selected(method, values, observed, clock, end, bad)
+        selected.fit_selected(method, values, observed, clock, end, bad,
+                              seed=2026 if method == "lstm" else None)
     fitting.assert_not_called()
 
 
 @pytest.mark.parametrize("method,field,value", [("ridge", "alpha", 100),
-                                                  (selected.ORIGINAL_HYBRID, "weight", .5)])
+                                                  (selected.ORIGINAL_HYBRID, "weight", .5),
+                                                  ("lstm", "selected_epochs", 24)])
 def test_reload_rejects_frozen_setting_tampering(fitted, tmp_path, method, field, value):
     selected.save_selected(fitted[method][0], tmp_path)
     manifest = tmp_path / "model.json"
