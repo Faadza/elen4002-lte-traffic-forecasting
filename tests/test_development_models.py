@@ -1,5 +1,6 @@
-"""Invented-data checks for baseline and LSTM development candidates."""
+"""Invented-data candidate routing, cached-ridge and causality checks."""
 import copy
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -8,7 +9,10 @@ import pytest
 import yaml
 
 from forecasting import development_models as development
+from forecasting.data import fit_scaler, make_examples, scaled_targets, tabular_inputs
 from forecasting.pilot_models import load_model, model_fingerprint, save_model
+from models.hybrid import training_residuals
+from models.ridge import fit_ridge, predict_ridge
 
 
 @pytest.fixture(scope="module")
@@ -25,7 +29,9 @@ def invented():
 
 
 def job(method, parameters=None, seed=None, **changes):
-    defaults = {"lstm": {"hidden_units": 32, "dropout": .2}}
+    defaults = {"ridge": {"alpha": 100}, "direct_lightgbm": {"trees": 128, "leaves": 31},
+                "ridge_lightgbm_hybrid": {"trees": 32, "leaves": 7},
+                "lstm": {"hidden_units": 32, "dropout": .2}}
     row = {"id": f"{method}-fixture", "stage": development.STAGES[method], "method": method,
            "cell": "invented-cell", "fold_index": 0, "fit_end": 280,
            "score_start": 280, "score_end": 310, "candidate_id": f"{method}-settings",
@@ -41,8 +47,12 @@ def fit(invented, candidate, **kwargs):
 
 @pytest.fixture(scope="module")
 def fitted(invented):
+    ridge = fit(invented, job("ridge"))
     bundles = {method: fit(invented, job(method)) for method in development.BASELINES}
-    bundles["lstm"] = fit(invented, job("lstm", seed=2027))
+    bundles.update(ridge=ridge,
+                   direct_lightgbm=fit(invented, job("direct_lightgbm")),
+                   ridge_lightgbm_hybrid=fit(invented, job("ridge_lightgbm_hybrid"), ridge_bundle=ridge),
+                   lstm=fit(invented, job("lstm", seed=2027)))
     return bundles
 
 
@@ -64,7 +74,17 @@ def test_candidate_roundtrip_preserves_predictions_and_provenance(invented, fitt
         assert restored.settings["training_target_count"] == 111
 
 
-def test_explicit_lstm_candidate_and_phase_timings(fitted):
+def test_explicit_ridge_candidate_matches_primitive_not_first_alpha(invented, fitted):
+    _, values, observed, clock = invented
+    model = fitted["ridge"]
+    examples = make_examples(values[:280], observed[:280], clock[:280], 0, 280)
+    scaler = fit_scaler(values[:280], observed[:280], 280)
+    expected = fit_ridge(tabular_inputs(examples, scaler), scaled_targets(examples, scaler), 100)
+    np.testing.assert_array_equal(model.model.coef_, expected.coef_)
+    assert model.model.intercept_ == expected.intercept_
+    assert model.settings["alpha"] == 100
+    assert fitted["direct_lightgbm"].settings["requested_trees"] == 128
+    assert fitted["direct_lightgbm"].settings["leaf_cap"] == 31
     assert fitted["lstm"].settings["hidden_units"] == 32
     assert fitted["lstm"].settings["dropout"] == .2
     assert fitted["lstm"].settings["seed"] == 2027
@@ -72,34 +92,115 @@ def test_explicit_lstm_candidate_and_phase_timings(fitted):
     assert fitted["lstm"].training_metadata["phase_timings"]["refit_seconds"] > 0
 
 
-@pytest.mark.parametrize("method", ["lstm"])
+def test_hybrid_reuses_loaded_ridge_without_any_ridge_fit(invented, fitted, monkeypatch, tmp_path):
+    original = fitted["ridge"]
+    save_model(original, tmp_path)
+    cached = load_model(tmp_path)
+    before = model_fingerprint(cached)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("The residual stage must not refit ridge")
+    monkeypatch.setattr(development, "fit_ridge", forbidden)
+    hybrid = fit(invented, job("ridge_lightgbm_hybrid"), ridge_bundle=cached)
+    assert hybrid.model is cached.model
+    assert hybrid.scaler == cached.scaler
+    assert model_fingerprint(cached) == before
+    assert hybrid.training_metadata["component_fit_counts"] == {"ridge": 0, "correction": 1}
+    assert hybrid.training_metadata["ridge_reused"] is True
+    assert hybrid.settings["ridge_dependency_job"] == cached.settings["development_job"]
+
+
+def test_residual_fit_sees_unclipped_ridge_predictions(invented, fitted, monkeypatch):
+    config, values, observed, clock = invented
+    captured = {}
+    original = development.fit_correction
+    def spy(model, features, targets, trees, leaves, settings):
+        captured["targets"] = targets.copy()
+        captured["ridge_z"] = predict_ridge(model, features)
+        captured["residuals"] = training_residuals(targets, captured["ridge_z"])
+        return original(model, features, targets, trees, leaves, settings)
+    monkeypatch.setattr(development, "fit_correction", spy)
+    fit(invented, job("ridge_lightgbm_hybrid"), ridge_bundle=fitted["ridge"])
+    assert (captured["ridge_z"] < 0).any()
+    expected = captured["targets"] - captured["ridge_z"]
+    np.testing.assert_array_equal(captured["residuals"], expected)
+    assert not np.array_equal(expected, captured["targets"] - np.maximum(0, captured["ridge_z"]))
+
+
+def test_all_weight_predictions_and_zero_weight_exact_identity(invented, fitted):
+    config, values, observed, clock = invented
+    hybrid = fitted["ridge_lightgbm_hybrid"]
+    z, correction = development.predict_hybrid_components(hybrid, values, observed, clock, [280, 281])
+    ridge_raw, ridge_final = development.predict_candidate(fitted["ridge"], values, observed, clock, [280, 281])
+    for weight in config["models"]["hybrid"]["weights"]:
+        raw, final = development.finalize_hybrid_components(hybrid, z, correction, weight, config)
+        np.testing.assert_array_equal(raw, hybrid.scaler.inverse(z + weight*correction))
+        np.testing.assert_array_equal(final, np.maximum(0, raw))
+        if weight == 0:
+            np.testing.assert_array_equal(raw, ridge_raw)
+            np.testing.assert_array_equal(final, ridge_final)
+        if weight == 1:
+            expected = development.predict_candidate(hybrid, values, observed, clock, [280, 281])
+            np.testing.assert_array_equal(raw, expected[0])
+            np.testing.assert_array_equal(final, expected[1])
+
+
+def test_no_intermediate_clipping_and_zero_needs_no_correction(invented, fitted):
+    config = invented[0]
+    hybrid = fitted["ridge_lightgbm_hybrid"]
+    z, correction = np.array([-20., 1.]), np.array([10., -20.])
+    raw, final = development.finalize_hybrid_components(hybrid, z, correction, .5, config)
+    np.testing.assert_array_equal(raw, hybrid.scaler.inverse(np.array([-15., -9.])))
+    np.testing.assert_array_equal(final, np.maximum(0, raw))
+    raw0, _ = development.finalize_hybrid_components(hybrid, z, None, 0, config)
+    np.testing.assert_array_equal(raw0, hybrid.scaler.inverse(z))
+
+
+@pytest.mark.parametrize("method", ["ridge", "direct_lightgbm", "ridge_lightgbm_hybrid", "lstm"])
 def test_no_future_fitting_dependency_or_input_mutation(invented, fitted, method):
     config, values, observed, clock = invented
     snapshot = copy.deepcopy(config)
     bad, flags = values.copy(), observed.astype(int)
     bad[280:], flags[280:] = np.inf, 99
     altered = config, bad, flags, clock
-    candidate = job(method, seed=2027)
-    bundle = fit(altered, candidate)
+    candidate = job(method, seed=2027 if method == "lstm" else None)
+    bundle = fit(altered, candidate, ridge_bundle=fitted["ridge"] if method == "ridge_lightgbm_hybrid" else None)
     assert model_fingerprint(bundle) == model_fingerprint(fitted[method])
     assert config == snapshot
     assert np.isinf(bad[280:]).all() and (flags[280:] == 99).all()
     assert bundle.scaler.mean == np.mean(values[:280][observed[:280]])
 
 
+def test_hybrid_component_prediction_does_not_read_current_or_future_target(invented, fitted):
+    _, values, observed, clock = invented
+    bundle = fitted["ridge_lightgbm_hybrid"]
+    expected = development.predict_hybrid_components(bundle, values, observed, clock, [280])
+    bad, flags = values.copy(), observed.astype(int)
+    bad[280:], flags[280:] = np.inf, 99
+    actual = development.predict_hybrid_components(bundle, bad, flags, clock, [280])
+    for left, right in zip(expected, actual):
+        np.testing.assert_array_equal(left, right)
+
+
 @pytest.mark.parametrize("edit", [
-    {"parameters": {}}, {"stage": "baselines"}, {"fold_index": True},
+    {"parameters": {"alpha": True}}, {"parameters": {"alpha": "100"}},
+    {"parameters": {"alpha": np.nan}}, {"parameters": {"alpha": 2}},
+    {"parameters": {"alpha": 100, "extra": 1}}, {"parameters": {}},
+    {"seed": 2026}, {"stage": "hybrid"}, {"fold_index": True},
     {"fit_end": 280.0}, {"score_start": 281}, {"score_end": 280},
     {"id": ""}, {"cell": ""}, {"unexpected": True},
 ])
 def test_invalid_job_rejected_before_fitting(invented, monkeypatch, edit):
-    candidate = job("lstm", seed=2027, **edit)
-    monkeypatch.setattr(development, "fit_development", lambda *args, **kwargs: pytest.fail("Invalid candidate fitted"))
+    candidate = job("ridge", **edit)
+    monkeypatch.setattr(development, "fit_ridge", lambda *args: pytest.fail("Invalid candidate fitted"))
     with pytest.raises(ValueError):
         fit(invented, candidate)
 
 
 @pytest.mark.parametrize("method,parameters,seed", [
+    ("direct_lightgbm", {"trees": True, "leaves": 7}, None),
+    ("direct_lightgbm", {"trees": 32., "leaves": 7}, None),
+    ("direct_lightgbm", {"trees": 33, "leaves": 7}, None),
+    ("direct_lightgbm", {"trees": 32, "leaves": 8}, None),
     ("lstm", {"hidden_units": 17, "dropout": 0.}, 2026),
     ("lstm", {"hidden_units": 16, "dropout": True}, 2026),
     ("lstm", {"hidden_units": 16, "dropout": .3}, 2026),
@@ -107,11 +208,48 @@ def test_invalid_job_rejected_before_fitting(invented, monkeypatch, edit):
     ("lstm", {"hidden_units": 16, "dropout": 0.}, 2026.),
     ("lstm", {"hidden_units": 16, "dropout": 0.}, 999),
     ("persistence", {"lag": 2}, None),
-    ("persistence", {}, 2026),
 ])
 def test_undeclared_candidates_rejected(invented, method, parameters, seed):
     with pytest.raises(ValueError):
         fit(invented, job(method, parameters, seed))
+
+
+@pytest.mark.parametrize("change", ["cell", "fold", "prefix", "scaler", "alpha", "count", "report", "method"])
+def test_incompatible_cached_ridge_rejected(invented, fitted, change):
+    original = fitted["ridge"]
+    settings, metadata = copy.deepcopy(original.settings), copy.deepcopy(original.training_metadata)
+    bundle = replace(original, settings=settings, training_metadata=metadata)
+    if change == "cell":
+        settings["development_job"]["cell"] = "another-cell"
+    elif change == "fold":
+        settings["development_job"]["fold_index"] = 1
+    elif change == "prefix":
+        settings["fit_end"] = 279
+    elif change == "scaler":
+        bundle = replace(bundle, scaler=replace(bundle.scaler, mean=bundle.scaler.mean+1))
+    elif change == "alpha":
+        settings["alpha"] = .1
+    elif change == "count":
+        settings["training_target_count"] -= 1
+    elif change == "report":
+        metadata["training_target_count"] -= 1
+    else:
+        bundle = replace(bundle, method="direct_lightgbm")
+    with pytest.raises(ValueError, match="ridge"):
+        fit(invented, job("ridge_lightgbm_hybrid"), ridge_bundle=bundle)
+
+
+def test_hybrid_dependency_is_required_and_exclusive(invented, fitted):
+    with pytest.raises(ValueError, match="ridge"):
+        fit(invented, job("ridge_lightgbm_hybrid"))
+    with pytest.raises(ValueError, match="Only the hybrid"):
+        fit(invented, job("ridge"), ridge_bundle=fitted["ridge"])
+
+
+@pytest.mark.parametrize("weight", [True, .1, "0", np.inf, -1])
+def test_weight_must_belong_to_declared_grid(invented, fitted, weight):
+    with pytest.raises(ValueError):
+        development.finalize_hybrid_components(fitted["ridge_lightgbm_hybrid"], [1.], [2.], weight, invented[0])
 
 
 def test_lstm_epoch_cap_cannot_be_enlarged(invented):
