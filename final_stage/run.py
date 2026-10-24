@@ -23,7 +23,7 @@ from ensemble_study.evaluation_plan import ROOT, verify_plan
 from ensemble_study.evaluation_run import validate_result, summarize, execution_identity
 from docs.commands.confirmation_recovery import (readiness_failure, wait_for_quiet,
     enforce_budget, RecoveryInterrupted, interrupt)
-from validation_revision.measurement import RULE, TOLERANCE
+from validation_revision.measurement import RULE, TOLERANCE, verify_audit
 
 CONFIG = ROOT/"docs/commands/final-evaluation-v1.json"
 RECEIPT = ROOT.parent/"context/reconciliation-review/final-evaluation-publication-2026-10-09.json"
@@ -151,17 +151,37 @@ def prepare_final(*, operator, host_ready):
 
 
 def validate_amended_result(attempt, job, plan, checksum, amendment, digest, *, read_forecasts=True):
-    if job["method"] == "lstm":
-        raise NotImplementedError("Final LSTM validation is not available")
     result = validate_result(attempt, job, plan, checksum, read_forecasts=read_forecasts)
     relative = str(attempt.relative_to(ROOT/amendment["output_directory"]))
     if relative in amendment["historical_attempts"]:
         if inventory_digest(attempt) != amendment["historical_attempts"][relative]:
             raise ValueError("Historical attempt changed")
+        if job["method"] == "lstm" and job["id"] not in amendment["audited_completed_lstm_jobs"]:
+            raise ValueError("Historical LSTM lacks the independent amended-rule audit")
     else:
         expected = amendment_identity(digest)
         if _read_json(attempt/"validation-amendment.json") != expected:
             raise ValueError("New attempt lacks the published amendment identity")
+        if job["method"] == "lstm":
+            predicted = result["predict"]
+            if predicted.get("validation_amendment") != expected:
+                raise ValueError("LSTM prediction used an unamended worker")
+            if plan["common_origins"]:
+                audit = predicted["timings"]["numerical_validation"]
+                verify_audit(audit, len(plan["common_origins"]))
+                import numpy as np
+                scaler = _read_json(attempt/"model/single/model.json")["scaler"]
+                if (audit["mean"] != scaler["mean"] or audit["sd"] != scaler["sd"]
+                        or scaler["fit_end"] != job["fit_end"]):
+                    raise ValueError("Numerical audit uses a different fitting scaler")
+                with np.load(attempt/"reference.npz", allow_pickle=False) as reference:
+                    positions = np.searchsorted(reference["targets"], plan["common_origins"])
+                    np.testing.assert_array_equal(reference["targets"][positions], plan["common_origins"])
+                    np.testing.assert_array_equal(audit["batch_z"],
+                        (reference["raw"][positions]-scaler["mean"])/scaler["sd"])
+            if job["id"] == amendment["diagnosed_failure_job"]:
+                if result["fit"]["model_state_sha256"] != amendment["diagnosed_model_state_sha256"]:
+                    raise ValueError("Retried LSTM model differs from the diagnosed same-seed fit")
     return result
 
 
@@ -206,9 +226,7 @@ def snapshot(directory, plan, amendment, digest):
 
 
 def launch(directory, job, attempt, phase, lock_fd):
-    if job["method"] == "lstm":
-        raise NotImplementedError("Final LSTM execution is not available")
-    module = "ensemble_study.evaluation_run"
+    module = "final_stage.worker" if phase == "predict" and job["method"] == "lstm" else "ensemble_study.evaluation_run"
     arguments = [sys.executable, "-B", "-m", module, "--output-dir", str(directory),
                  "--worker", job["id"], "--attempt", str(attempt)]
     if module == "ensemble_study.evaluation_run":
