@@ -131,7 +131,7 @@ def _load_historical(original_directory, l1_directory):
             raise ValueError(f"Pinned historical L1 evidence changed: {name}")
     original_plan, config, original_records, original_inventory = audit_original(original)
     l1_inventory = _inventory(l1, exclude=(".run.lock",))
-    l1_plan, l1_config, l1_checksum = historical_l1.verify_plan(l1)
+    l1_plan, l1_config, l1_checksum = historical_l1.verify_archived_plan(l1)
     historical_l1.verify_source_inventory(l1, l1_plan)
     if (Path(l1_plan["original_directory"]).absolute() != original
             or original_inventory != _read_json(l1 / "original-inventory.json")

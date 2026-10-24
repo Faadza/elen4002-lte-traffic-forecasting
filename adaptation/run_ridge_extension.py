@@ -17,6 +17,7 @@ import time
 
 from adaptation.plan import (NEW_ALPHAS, PLAN_SHA256, SUMMARY_SHA256, build_jobs,
                              effective_config, scoring_candidates, select_ridge, select_hybrid)
+from adaptation import historical
 from tools import run_development_experiments as original
 from tools.development_store import (begin_attempt, complete_attempt, load_success,
                                      run_lock, sha256, write_json_atomic)
@@ -62,7 +63,7 @@ def audit_original(directory):
     from tools.development_store import _inventory, verify_inventory
     source_identity(directory)
     inventory = _inventory(directory, exclude=(".run.lock",))
-    plan, config, checksum = original.verify_plan(directory)
+    plan, config, checksum = historical.verify_original_plan(directory)
     summary = read_json(directory / "development-summary.json")
     all_records, selections = {}, {}
     for stage in STAGES:
@@ -101,10 +102,14 @@ def audit_original(directory):
 
 def prepare(source, directory):
     from forecasting.development_plan import TUNING_CELLS
+    from tools.run_development_pilot import code_hashes
     source, directory = source.resolve(), directory.resolve()
     if directory.exists() or source == directory or source in directory.parents or directory in source.parents:
         raise ValueError("Use a new output directory outside the original run")
     initial, config, records, inventory = audit_original(source)
+    identity, machine = original.environment_identity()
+    if identity != initial["environment_identity"]:
+        raise ValueError("Preparation requires the original host, interpreter and packages")
     directory.mkdir(parents=True)
     (directory / "series").mkdir()
     for cell in TUNING_CELLS:
@@ -114,7 +119,6 @@ def prepare(source, directory):
     shutil.copyfile(source / "development-summary.json", directory / "original-summary.json")
     write_json_atomic(directory / "original-records.json", records)
     write_json_atomic(directory / "original-inventory.json", inventory)
-    identity, machine = original.environment_identity()
     plan = {"schema_version": 1, "scope": "single bounded ridge regularisation extension",
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "original_directory": str(source), "original_plan_sha256": PLAN_SHA256,
@@ -122,6 +126,8 @@ def prepare(source, directory):
             "original_records_sha256": sha256(directory / "original-records.json"),
             "original_inventory_sha256": sha256(directory / "original-inventory.json"),
             "original_code_sha256": initial["code_sha256"], "extension_code_sha256": extension_hashes(),
+            "runtime_development_code_sha256": code_hashes(),
+            "source_compatibility_sha256": historical.catalog_sha256(),
             "config_sha256": original.CONFIG_SHA256,
             "effective_config": effective_config(config),
             "series": initial["series"], "jobs": build_jobs(config, "ridge") + build_jobs(config, "hybrid"),
@@ -150,10 +156,13 @@ def verify_plan(directory):
     if sha256(directory / "original-plan.json") != PLAN_SHA256 or sha256(directory / "original-summary.json") != SUMMARY_SHA256:
         raise ValueError("Copied original evidence changed")
     initial = read_json(directory / "original-plan.json")
+    historical.verify_development_code(initial["code_sha256"])
     if (plan["schema_version"] != 1 or plan["original_plan_sha256"] != PLAN_SHA256
             or plan["original_summary_sha256"] != SUMMARY_SHA256
             or plan["config_sha256"] != original.CONFIG_SHA256
-            or plan["original_code_sha256"] != initial["code_sha256"] or code_hashes() != initial["code_sha256"]
+            or plan["original_code_sha256"] != initial["code_sha256"]
+            or plan.get("runtime_development_code_sha256") != code_hashes()
+            or plan.get("source_compatibility_sha256") != historical.catalog_sha256()
             or plan["extension_code_sha256"] != extension_hashes()
             or plan["effective_config"] != effective_config(config)
             or plan["series"] != initial["series"]

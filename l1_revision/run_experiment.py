@@ -14,6 +14,7 @@ import sys
 import time
 
 from adaptation.plan import PLAN_SHA256, SUMMARY_SHA256, aggregate
+from adaptation import historical as archive
 from adaptation.run_ridge_extension import (audit_original, read_json, save_or_check,
                                            source_identity, stage_session)
 from forecasting.development_plan import TUNING_CELLS
@@ -65,6 +66,7 @@ def historical_blend(source, initial, config):
 
 
 def prepare(source, directory):
+    from tools.run_development_pilot import code_hashes
     source, directory = source.resolve(), directory.resolve()
     if directory.exists() or source == directory or source in directory.parents or directory in source.parents:
         raise ValueError("Use a new output directory outside the original run")
@@ -90,6 +92,8 @@ def prepare(source, directory):
             "scientific_specification": scientific_specification(config), "original_directory": str(source),
             "original_plan_sha256": PLAN_SHA256, "original_summary_sha256": SUMMARY_SHA256,
             "original_code_sha256": initial["code_sha256"], "revision_and_dependency_code_sha256": package_hashes(),
+            "runtime_development_code_sha256": code_hashes(),
+            "source_compatibility_sha256": archive.catalog_sha256(),
             "config_sha256": original.CONFIG_SHA256, "jobs": build_jobs(config), "series": initial["series"],
             "imported_sha256": {name: sha256(directory / name) for name in
                 ("original-records.json", "original-inventory.json", "historical-blend.json")},
@@ -106,6 +110,16 @@ def verify_source_inventory(directory, plan):
 
 
 def verify_plan(directory):
+    """Validate a new/current run, including its exact runtime and original host."""
+    return _verify_plan(directory, archived=False)
+
+
+def verify_archived_plan(directory):
+    """Read the one pinned historical L1 run; never authorise its execution."""
+    return _verify_plan(directory, archived=True)
+
+
+def _verify_plan(directory, *, archived):
     from tools.run_development_pilot import code_hashes
     config = original.read_config()
     plan = read_json(directory / "plan.json")
@@ -116,18 +130,30 @@ def verify_plan(directory):
     if sha256(directory / "original-plan.json") != PLAN_SHA256 or sha256(directory / "original-summary.json") != SUMMARY_SHA256:
         raise ValueError("Copied original evidence changed")
     initial = read_json(directory / "original-plan.json")
+    archive.verify_development_code(initial["code_sha256"])
+    if archived:
+        if checksum != archive.L1_PLAN_SHA256:
+            raise ValueError("L1 archive is not the reviewed historical plan")
+        archive.verify_archived_config(plan["config_sha256"])
+        archive.verify_l1_package(plan["revision_and_dependency_code_sha256"], package_hashes())
+    elif (plan["config_sha256"] != original.CONFIG_SHA256
+            or plan.get("runtime_development_code_sha256") != code_hashes()
+            or plan.get("source_compatibility_sha256") != archive.catalog_sha256()
+            or plan["revision_and_dependency_code_sha256"] != package_hashes()):
+        raise ValueError("Revision differs from its current code or configuration")
     if (plan["schema_version"] != 1 or plan["original_plan_sha256"] != PLAN_SHA256
             or plan["original_summary_sha256"] != SUMMARY_SHA256
-            or plan["config_sha256"] != original.CONFIG_SHA256
-            or plan["original_code_sha256"] != initial["code_sha256"] or code_hashes() != initial["code_sha256"]
-            or plan["revision_and_dependency_code_sha256"] != package_hashes()
+            or plan["original_code_sha256"] != initial["code_sha256"]
             or plan["scientific_specification"] != scientific_specification(config)
             or plan["jobs"] != build_jobs(config) or plan["series"] != initial["series"]
             or plan["cpu_startup_profile"] != CPU_ENV):
         raise ValueError("Revision differs from its fixed source, scientific plan or workload")
-    identity, _ = original.environment_identity()
-    if identity != plan["environment_identity"] or identity != initial["environment_identity"]:
+    if plan["environment_identity"] != initial["environment_identity"]:
         raise ValueError("Revision requires the original machine, interpreter and package versions")
+    if not archived:
+        identity, _ = original.environment_identity()
+        if identity != plan["environment_identity"]:
+            raise ValueError("Revision requires the original machine, interpreter and package versions")
     expected_imports = {"original-records.json", "original-inventory.json", "historical-blend.json"}
     if set(plan["imported_sha256"]) != expected_imports:
         raise ValueError("Incomplete imported evidence")

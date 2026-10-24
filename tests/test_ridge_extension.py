@@ -154,7 +154,10 @@ def prepared(tmp_path, monkeypatch, config):
         series[cell] = save_series(source, cell, data)
         series[cell]["folds"] = [{"targets": runner.targets_for(data,j).tolist()} for j in development_plan.build_jobs(config,"ridge")[:27] if j["cell"] == cell]
     from tools.run_development_pilot import code_hashes
-    original_plan = {"series":series,"code_sha256":code_hashes(),"environment_identity":{"invented":True}}
+    archived_code = code_hashes()
+    for name, pair in runner.historical.catalog()["development_revisions"].items():
+        archived_code[name] = pair["original_sha256"]
+    original_plan = {"series":series,"code_sha256":archived_code,"environment_identity":{"invented":True}}
     put_json(source / "plan.json", original_plan)
     initial, _ = ridge_rows(config)
     hybrid = records(development_plan.score_candidates(config,"hybrid")[1:])
@@ -174,17 +177,22 @@ def prepared(tmp_path, monkeypatch, config):
 
 
 def test_preparation_reads_only_original_prefixes_and_preserves_source(prepared):
+    from tools.run_development_pilot import code_hashes
     source,directory,before = prepared
     plan,_,_ = runner.verify_plan(directory)
     assert _inventory(source) == before
     assert len(plan["jobs"]) == 216
     assert not (directory / "jobs").exists()
     assert not (directory / "selections").exists()
+    assert plan["runtime_development_code_sha256"] == code_hashes()
+    assert plan["original_code_sha256"] != plan["runtime_development_code_sha256"]
+    assert plan["source_compatibility_sha256"] == runner.historical.catalog_sha256()
     for cell in development_plan.TUNING_CELLS:
         assert all(len(a) == 6132 for a in runner.load_series(directory,plan,cell).values())
 
 
-@pytest.mark.parametrize("change", ["effective_config","new_alphas","jobs","maximum_new_fits","series","extension_code_sha256","holdout_forecasts_enabled"])
+@pytest.mark.parametrize("change", ["effective_config","new_alphas","jobs","maximum_new_fits","series","extension_code_sha256","holdout_forecasts_enabled",
+                                  "runtime_development_code_sha256", "source_compatibility_sha256"])
 def test_resealed_changed_plan_fails_closed(prepared,change):
     _,directory,_ = prepared
     p=runner.read_json(directory / "plan.json")
@@ -247,7 +255,7 @@ def test_audit_rejects_source_mutation_during_readonly_verification(tmp_path,con
              "attempts_including_failures":[],"stage_sessions_including_failures":[{
                  "session":"session-0001","stage":"ridge","timing":{"status":"passed","wall_seconds":2.0}}]})
     monkeypatch.setattr(runner,"source_identity",lambda _:None)
-    monkeypatch.setattr(runner.original,"verify_plan",lambda _:({},config,checksum))
+    monkeypatch.setattr(runner.historical,"verify_original_plan",lambda _:({},config,checksum))
     monkeypatch.setattr(development_plan,"STAGES",("ridge",))
     def collect(*args):
         if change=="extra_file": (tmp_path / "changed-during-audit.txt").write_text("new evidence")

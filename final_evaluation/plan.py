@@ -7,6 +7,7 @@ from pathlib import Path
 from tools.development_store import sha256, write_json_atomic, load_success, _read_json
 from tools.run_development_experiments import environment_identity, read_config
 from tools.run_cpu import CPU_ENV
+from adaptation import historical
 
 ROOT = Path(__file__).resolve().parents[1]
 SUMMARY_SHA = "a3d6905021770195c8ff813c0bbbc4536ecc227371c03420f140e7fe086cb3b2"
@@ -24,42 +25,28 @@ FROZEN = {"ridge_alpha": 1000, "direct_trees": 128, "direct_leaves": 7,
           "blend_ridge_weight": .2, "lstm_hidden": 32, "lstm_dropout": .2,
           "lstm_epochs": 23, "tree_objective": "regression"}
 
-# Exact revisions to data/configuration verification in the public code.
-# Each pair is (archived source hash, reviewed runtime source hash).
+# Keep one catalog for the development and held-out archive readers.
 REVIEWED_SOURCE_REVISIONS = {
-    "tools/check_prepared_data.py": (
-        "74a1a4d624d92ba5b31ee782b2bbbb481766a865fe1435f218a9f4b5db2eb303",
-        "bc74fafc0badacc80754c05bafd582684ba252c524032568d1d4c13b7560f437"),
-    "tools/run_development_capacity.py": (
-        "c117a517bcac2cf082e91344620fba424629894f776526f3f2ebd76f833182b7",
-        "252ebd0cc631509416dc8b2cf8e4601037bc61e84bb59122af3215315c3c55a2"),
-    "tools/run_development_experiments.py": (
-        "61ded17a1e31e9c58f8f279ffbf55cb22793610b68e1d51b456ac77c67adeefc",
-        "b3f8ecd1cf8ae8f40a7d2cdac4192ba9ed3965f4eaff4491460a0c9e7e87b8f2"),
-    "tools/run_development_pilot.py": (
-        "861c957bb4693b05881d8c00139a2a3be7e7adc5beee9a86e0494abfbca43657",
-        "802948ee3997f001bc670481f61f4444ed38ba763e12410cad1e3d434d271ae9"),
+    name: (pair["original_sha256"], pair["current_sha256"])
+    for name, pair in historical.catalog()["development_revisions"].items()
 }
 
 
 def verify_development_code(archived_hashes):
     """Accept exact archived code or a reviewed path-and-hash pair only."""
-    revisions = {}
-    for name, archived in archived_hashes.items():
-        current = sha256(ROOT / name)
-        if current == archived:
-            continue
-        if REVIEWED_SOURCE_REVISIONS.get(name) != (archived, current):
-            raise ValueError(f"Unreviewed development source change: {name}")
-        revisions[name] = {"original_sha256": archived, "current_sha256": current}
-    return revisions
+    current = {name: sha256(ROOT / name) for name in archived_hashes}
+    revisions = {name: {"original_sha256": pair[0], "current_sha256": pair[1]}
+                 for name, pair in REVIEWED_SOURCE_REVISIONS.items()}
+    return historical.verify_source_hashes(archived_hashes, current, revisions)
 
 
 def code_hashes():
     directories = ("tools", "models", "forecasting", "evaluation", "preprocessing",
-                   "blend_revision", "final_evaluation")
-    return {str(p.relative_to(ROOT)): sha256(p) for d in directories
-            for p in sorted((ROOT / d).glob("*.py"))}
+                   "adaptation", "blend_revision", "final_evaluation")
+    hashes = {str(p.relative_to(ROOT)): sha256(p) for d in directories
+              for p in sorted((ROOT / d).glob("*.py"))}
+    hashes["docs/source-compatibility.json"] = historical.catalog_sha256()
+    return hashes
 
 
 def jobs_for(period, cells):

@@ -1,0 +1,43 @@
+{
+  "checklist_revision": {
+    "current_sha256": "1ae1c56242618c87e70f7429c6ceef7c46886825d2f9f7c7a9cb571758c977e4",
+    "original_sha256": "6385c12218b7f951b3cc47d0d003db132c58379544447751e6ec1ab1857dcc4a"
+  },
+  "config_revision": {
+    "current_sha256": "421a4a6742cec01bde5a756927db9cca7fcf76efb683e040e3b0f2e4f2fe5911",
+    "original_sha256": "68bd3c36778c0790e3c8ed09aed10fa3c29369a7d558f5d044c35a2170193ab0"
+  },
+  "development_revisions": {
+    "tools/check_prepared_data.py": {
+      "current_sha256": "bc74fafc0badacc80754c05bafd582684ba252c524032568d1d4c13b7560f437",
+      "original_sha256": "74a1a4d624d92ba5b31ee782b2bbbb481766a865fe1435f218a9f4b5db2eb303"
+    },
+    "tools/run_development_capacity.py": {
+      "current_sha256": "252ebd0cc631509416dc8b2cf8e4601037bc61e84bb59122af3215315c3c55a2",
+      "original_sha256": "c117a517bcac2cf082e91344620fba424629894f776526f3f2ebd76f833182b7"
+    },
+    "tools/run_development_experiments.py": {
+      "current_sha256": "b3f8ecd1cf8ae8f40a7d2cdac4192ba9ed3965f4eaff4491460a0c9e7e87b8f2",
+      "original_sha256": "61ded17a1e31e9c58f8f279ffbf55cb22793610b68e1d51b456ac77c67adeefc"
+    },
+    "tools/run_development_pilot.py": {
+      "current_sha256": "802948ee3997f001bc670481f61f4444ed38ba763e12410cad1e3d434d271ae9",
+      "original_sha256": "861c957bb4693b05881d8c00139a2a3be7e7adc5beee9a86e0494abfbca43657"
+    }
+  },
+  "l1_package_additions": {
+    "adaptation/historical.py": "6177ef0dc8256a2734f0077d9ff71c2b1e7a0325b1d0466c4b962e6eb23dd8df"
+  },
+  "l1_package_revisions": {
+    "adaptation/run_ridge_extension.py": {
+      "current_sha256": "2902d91b0ce1bd87eccdac35ea3a2017eb9b3490ee0246eaaad7643195f207b2",
+      "original_sha256": "6ff8bb0bae3831a0f850177fce133feb60b461ba99af47bdb0dc56a723168b8b"
+    },
+    "l1_revision/run_experiment.py": {
+      "current_sha256": "a01e8ff3682993830179a75cb2cd3a049ec894d6a15422ae441a90a13d9fd612",
+      "original_sha256": "e64aa8146a3a3dfc9ab1c68a82caf283aa074a47ab42f45cc9ae879ebb456301"
+    }
+  },
+  "schema_version": 1,
+  "scope": "Exact reviewed source revisions for reading pinned development archives; not permission to resume old runs."
+}

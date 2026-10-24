@@ -48,3 +48,5 @@ An optional installation check exercises the packages using small invented array
 ```
 
 This check does not read traffic data or measure forecasting accuracy. The recorded study used one Mac for comparative timing; a successful installation on another computer does not reproduce those timings. Use [the data instructions](../data/README.md) for local data and [the data contract](data-contract.md) for preparation behaviour.
+
+See [running and checking the code](execution.md) for the test command, development entrypoints and the external evidence required by historical audits and continuation runs.

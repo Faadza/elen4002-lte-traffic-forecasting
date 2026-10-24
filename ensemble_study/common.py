@@ -40,6 +40,7 @@ def code_hashes(scope="evaluation"):
     handoff = ROOT / "tools/run_ensemble_development_mac.sh"
     if handoff.exists():
         hashes[str(handoff.relative_to(ROOT))] = sha256(handoff)
+    hashes["docs/source-compatibility.json"] = sha256(ROOT / "docs/source-compatibility.json")
     return hashes
 
 
