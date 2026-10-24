@@ -21,8 +21,9 @@ import numpy as np
 from blend_revision.model import FROZEN_TREE_PARAMETERS, blend_raw_predictions
 from evaluation.metrics import finalize_predictions
 from forecasting.data import fit_scaler, make_examples, scaled_targets, tabular_inputs
-from forecasting.pilot_models import (PilotModel, _prefix,
-    load_model as load_component, model_fingerprint,
+from forecasting.lstm_training import fit_fixed_epochs
+from forecasting.pilot_models import (BASELINES, PilotModel, _prefix,
+    load_model as load_component, model_fingerprint, predict_model,
     prediction_examples, save_model as save_component)
 from models.lightgbm import build_parameters, fit_lightgbm, predict_lightgbm
 from models.ridge import fit_ridge, predict_ridge
@@ -33,6 +34,8 @@ CONDITION_KEYS = {"id", "kind", "objective", "trees", "leaves", "ridge_weight"}
 TREE_COUNTS, LEAF_CAPS = (32, 128, 512), (7, 31)
 INTERIOR_WEIGHTS = (.05, .1, .2, .3, .5, .75)
 RIDGE_ALPHA = 1000
+LSTM_HIDDEN, LSTM_DROPOUT, LSTM_EPOCHS = 32, .2, 23
+LSTM_SEEDS = (2026, 2027, 2028)
 FIT_SCOPE = (
     "Loaded arrays to freshly fitted complete model: prefix slicing, scaler, "
     "features and all component fits; excludes imports, disk I/O, logging, "
@@ -53,13 +56,19 @@ def checked_condition(condition):
     if not isinstance(c["id"], str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,199}", c["id"]) is None:
         raise ValueError("Condition id must be a safe nonempty identifier")
     kind = c["kind"]
-    if kind == "ridge":
+    if kind == "baseline":
+        if c["id"] not in BASELINES or any(c[k] is not None for k in ("objective", "trees", "leaves", "ridge_weight")):
+            raise ValueError("Baseline condition must name its fixed rule and have no learned settings")
+    elif kind in ("ridge", "lstm"):
         if any(c[k] is not None for k in ("objective", "trees", "leaves")):
-            raise ValueError("Ridge conditions do not accept tree settings")
+            raise ValueError("Ridge and LSTM conditions do not accept tree settings")
         weight = c["ridge_weight"]
-        if isinstance(weight, (bool, np.bool_)) or not isinstance(weight, Real) or weight != 1:
-            raise ValueError("Standalone ridge requires endpoint weight1")
-        c["ridge_weight"] = 1.
+        if kind == "ridge":
+            if isinstance(weight, (bool, np.bool_)) or not isinstance(weight, Real) or weight != 1:
+                raise ValueError("Standalone ridge requires endpoint weight1")
+            c["ridge_weight"] = 1.
+        elif weight is not None:
+            raise ValueError("LSTM has no ridge weight")
     elif kind in ("direct", "blend"):
         if c["objective"] not in ("l1", "l2"):
             raise ValueError("Tree objective must be l1 or l2")
@@ -87,8 +96,17 @@ def _expected_tree(condition):
 def _arguments(condition, config, seed):
     c = checked_condition(condition)
     kind, models = c["kind"], config["models"]
-    if seed is not None:
-        raise ValueError("These conditions do not accept a per-fit seed")
+    if kind == "lstm":
+        if isinstance(seed, (bool, np.bool_)) or not isinstance(seed, Integral) or seed not in LSTM_SEEDS:
+            raise ValueError("LSTM requires explicit seed2026,2027 or2028")
+        spec = models["lstm"]
+        if (LSTM_HIDDEN not in spec["hidden_units"] or LSTM_DROPOUT not in spec["output_dropout"]
+                or tuple(spec["seeds_all_formal_periods"]) != LSTM_SEEDS
+                or spec.get("confirmation_final_early_stopping") is not False
+                or spec["maximum_epochs"] < LSTM_EPOCHS):
+            raise ValueError("LSTM configuration differs from the fixed architecture and epoch rule")
+    elif seed is not None:
+        raise ValueError("Only LSTM accepts a per-fit seed")
     if kind in ("ridge", "blend"):
         spec = models["ridge"]
         if (RIDGE_ALPHA not in spec["alphas"] or spec.get("fit_intercept") is not True
@@ -136,6 +154,21 @@ def _fit_complete(condition, values, observed, timestamps, fit_end, config, seed
     settings = {"fit_end": int(fit_end), "lookback": LOOKBACK}
     metadata = {"fit_interval": [0, int(fit_end)], "cached_component_reused": False,
                 "target_design": "independent full traffic target", "component_fit_counts": {}}
+    if kind == "baseline":
+        component = PilotModel(condition["id"], None, None,
+                               {**settings, "lag": BASELINES[condition["id"]][1]}, metadata)
+        return StudyModel(condition, None, settings, metadata, single=component)
+    if kind == "lstm":
+        fitted = fit_fixed_epochs(past, flags, clock, fit_end,
+            hidden_units=LSTM_HIDDEN, dropout=LSTM_DROPOUT, seed=seed,
+            settings=config["models"]["lstm"], epochs=LSTM_EPOCHS, progress=None)
+        fitted.model.eval()
+        settings.update(hidden_units=LSTM_HIDDEN, dropout=LSTM_DROPOUT, selected_epochs=LSTM_EPOCHS,
+                        seed=int(seed), batch_size=32, training_target_count=fitted.metadata["fit_count"])
+        metadata.update(fitted.metadata)
+        component = PilotModel("lstm", fitted.model, fitted.scaler, deepcopy(settings), metadata)
+        return StudyModel(condition, fitted.scaler, settings, metadata, single=component)
+
     scaler = fit_scaler(past, flags, fit_end)
     examples = make_examples(past, flags, clock, 0, fit_end)
     features, target = tabular_inputs(examples, scaler), scaled_targets(examples, scaler)
@@ -198,14 +231,18 @@ def checked_model(bundle):
         raise ValueError("Expected a StudyModel")
     condition = checked_condition(bundle.condition)
     kind, settings = condition["kind"], bundle.settings
-    expected = ({"ridge"} if kind == "ridge" else {"direct"} if kind == "direct" else {"ridge", "direct"})
+    expected = ({"single"} if kind in ("baseline", "lstm") else
+                {"ridge"} if kind == "ridge" else {"direct"} if kind == "direct" else {"ridge", "direct"})
     if {name for name in ("ridge", "direct", "single") if getattr(bundle, name) is not None} != expected:
         raise ValueError("Model components do not match the requested study condition")
     end = settings.get("fit_end")
     if (isinstance(end, (bool, np.bool_)) or not isinstance(end, Integral) or end < 1
             or settings.get("lookback") != LOOKBACK):
         raise ValueError("Invalid fitted prefix or feature schema")
-    if bundle.scaler is None or bundle.scaler.fit_end != end:
+    if kind == "baseline":
+        if bundle.scaler is not None:
+            raise ValueError("A baseline has no fitted traffic scaler")
+    elif bundle.scaler is None or bundle.scaler.fit_end != end:
         raise ValueError("Study model scaler belongs to a different fitting prefix")
     for name in expected:
         component = getattr(bundle, name)
@@ -213,10 +250,11 @@ def checked_model(bundle):
                 or component.scaler != bundle.scaler or component.settings.get("fit_end") != end
                 or component.settings.get("lookback") != LOOKBACK):
             raise ValueError("Component scaler, feature schema or prefix mismatch")
-        count = settings.get("training_target_count")
-        if (isinstance(count, (bool, np.bool_)) or not isinstance(count, Integral) or count < 1
-                or component.settings.get("training_target_count") != count):
-            raise ValueError("Components must use the same nonempty supervised training rows")
+        if kind != "baseline":
+            count = settings.get("training_target_count")
+            if (isinstance(count, (bool, np.bool_)) or not isinstance(count, Integral) or count < 1
+                    or component.settings.get("training_target_count") != count):
+                raise ValueError("Components must use the same nonempty supervised training rows")
     if bundle.ridge is not None:
         component = bundle.ridge
         native = component.model.get_params(deep=False)
@@ -227,6 +265,19 @@ def checked_model(bundle):
             raise ValueError("Ridge component differs from the selected alpha1000 model")
     if bundle.direct is not None:
         _tree_check(bundle.direct, condition)
+    if kind == "baseline":
+        component = bundle.single
+        if (component.method != condition["id"] or component.model is not None
+                or component.settings.get("lag") != BASELINES[condition["id"]][1]):
+            raise ValueError("Baseline payload differs from its declared forecasting rule")
+    if kind == "lstm":
+        component = bundle.single
+        if (component.method != "lstm" or component.settings != settings
+                or settings.get("hidden_units") != LSTM_HIDDEN or settings.get("dropout") != LSTM_DROPOUT
+                or settings.get("selected_epochs") != LSTM_EPOCHS or settings.get("seed") not in LSTM_SEEDS
+                or settings.get("batch_size") != 32 or component.model.hidden_units != LSTM_HIDDEN
+                or component.model.output_dropout != LSTM_DROPOUT):
+            raise ValueError("LSTM differs from its frozen architecture, seeds or fixed23 epochs")
     return bundle
 
 
@@ -235,17 +286,20 @@ def predict_with_components(bundle, values, observed, timestamps, targets):
     checked_model(bundle)
     kind = bundle.condition["kind"]
     ridge_raw = direct_raw = None
-    examples = prediction_examples(values, observed, timestamps, targets)
-    features = tabular_inputs(examples, bundle.scaler)
-    if bundle.ridge is not None:
-        ridge_raw = bundle.scaler.inverse(predict_ridge(bundle.ridge.model, features))
-    if bundle.direct is not None:
-        direct_raw = bundle.scaler.inverse(predict_lightgbm(bundle.direct.model, features))
-    if kind == "blend":
-        raw, final = blend_raw_predictions(ridge_raw, direct_raw, bundle.condition["ridge_weight"])
+    if kind in ("baseline", "lstm"):
+        raw, final = predict_model(bundle.single, values, observed, timestamps, targets)
     else:
-        raw = ridge_raw.copy() if kind == "ridge" else direct_raw.copy()
-        final, _ = finalize_predictions(raw)
+        examples = prediction_examples(values, observed, timestamps, targets)
+        features = tabular_inputs(examples, bundle.scaler)
+        if bundle.ridge is not None:
+            ridge_raw = bundle.scaler.inverse(predict_ridge(bundle.ridge.model, features))
+        if bundle.direct is not None:
+            direct_raw = bundle.scaler.inverse(predict_lightgbm(bundle.direct.model, features))
+        if kind == "blend":
+            raw, final = blend_raw_predictions(ridge_raw, direct_raw, bundle.condition["ridge_weight"])
+        else:
+            raw = ridge_raw.copy() if kind == "ridge" else direct_raw.copy()
+            final, _ = finalize_predictions(raw)
     return {"raw": raw, "final": final, "ridge_raw": ridge_raw, "direct_raw": direct_raw}
 
 
@@ -296,7 +350,8 @@ def load_model(directory):
             or payload["schema_version"] != 1):
         raise ValueError("Unsupported study-model deployment manifest")
     condition = checked_condition(payload["condition"])
-    expected = (["ridge"] if condition["kind"] == "ridge" else
+    expected = (["single"] if condition["kind"] in ("baseline", "lstm") else
+                ["ridge"] if condition["kind"] == "ridge" else
                 ["direct"] if condition["kind"] == "direct" else ["ridge", "direct"])
     if payload["components"] != expected or {p.name for p in directory.iterdir()} != {"ensemble.json", *expected}:
         raise ValueError("Unexpected study-model component inventory")

@@ -20,8 +20,8 @@ def condition(kind, objective=None, trees=None, leaves=None, weight=None, identi
             "trees": trees, "leaves": leaves, "ridge_weight": weight}
 
 
-CONDITIONS = [
-    condition("ridge", weight=1),
+CONDITIONS = [condition("baseline", identifier=name) for name in study.BASELINES] + [
+    condition("ridge", weight=1), condition("lstm"),
     *[condition(kind, objective, 32, 7, .2 if kind == "blend" else 0, kind+"-"+objective)
       for kind in ("direct", "blend") for objective in ("l1", "l2")],
 ]
@@ -178,6 +178,22 @@ def test_timer_includes_shared_preparation_and_both_full_target_fits(invented, o
     assert stats["fit_seconds"] == 1e-7
 
 
+def test_lstm_keeps23_fixed_epochs_without_a_stopping_tail(fitted):
+    bundle, stats = fitted["lstm"]
+    assert bundle.settings["selected_epochs"] == 23
+    assert stats["early_stopping"] is False
+    assert stats["component_fit_counts"] == {"full_prefix_fit": 1}
+    assert [r["epoch"] for r in stats["history"]] == list(range(1, 24))
+
+
+@pytest.mark.parametrize("seed", [2026, 2027, 2028])
+def test_all_three_lstm_seeds_route_without_reselection(invented, fitted, seed):
+    config, values, observed, clock, end = invented
+    with patch.object(study, "_fit_complete", return_value=fitted["lstm"][0]) as fitting:
+        study.fit_selected(condition("lstm"), values, observed, clock, end, config, seed=seed)
+    assert fitting.call_args.args[-1] == seed
+
+
 @pytest.mark.parametrize("trees,leaves", [(t,l) for t in study.TREE_COUNTS for l in study.LEAF_CAPS])
 @pytest.mark.parametrize("objective", ["l1", "l2"])
 def test_all_declared_capacity_and_objective_settings(invented, trees, leaves, objective):
@@ -207,7 +223,7 @@ def test_invalid_conditions_rejected_before_fitting(invented, change):
     fitting.assert_not_called()
 
 
-@pytest.mark.parametrize("kind,seed", [("ridge", 2026)])
+@pytest.mark.parametrize("kind,seed", [("lstm", None), ("lstm", 2029), ("lstm", True), ("ridge", 2026)])
 def test_invalid_seed_is_rejected(invented, kind, seed):
     config, values, observed, clock, end = invented
     c = condition(kind, weight=1 if kind == "ridge" else None)
