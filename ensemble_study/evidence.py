@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import statistics
 
 import numpy as np
 import pandas as pd
@@ -32,6 +33,7 @@ L1_PINS = {
     "original-inventory.json": "bdf228be27fd1ebe262e4d83ce1d0e8f1f1194a589a1a3d6b7a3f6bc2637fc10",
 }
 REUSED_L1_CAPACITIES = {(32, 31), (128, 7)}
+LSTM_ID = "lstm-h32-d0p2"
 
 
 def _digest_json(value):
@@ -70,8 +72,27 @@ def _frame(path, job, data, targets):
 
 
 def derive_fixed_epochs(jobs, results):
-    """Require stopping-epoch evidence before certifying historical reuse."""
-    raise NotImplementedError("LSTM stopping-epoch evidence verification is required before historical reuse")
+    """Re-derive the frozen epoch count from exactly 9×3×3 selected fits."""
+    selected = [j for j in jobs if j.get("stage") == "lstm" and j.get("candidate_id") == LSTM_ID]
+    expected = {(cell, fold, seed) for cell in TUNING_CELLS for fold in range(3)
+                for seed in common.FIXED["seeds"]}
+    keys = [(j["cell"], j["fold_index"], j["seed"]) for j in selected]
+    if len(keys) != 81 or set(keys) != expected or set(results) != {j["id"] for j in selected}:
+        raise ValueError("Fixed epochs require all 81 selected original LSTM cell/fold/seed results")
+    epochs = []
+    for job in selected:
+        result = results[job["id"]]
+        value = result["training"]["selected_epochs"]
+        if (result["job"] != job or isinstance(value, bool) or not isinstance(value, int)
+                or not 1 <= value <= 100):
+            raise ValueError("Invalid selected LSTM epoch evidence")
+        epochs.append(value)
+    derived = math.ceil(statistics.median(epochs))
+    if derived != common.FIXED["lstm_epochs"]:
+        raise ValueError("The declared 23 epochs no longer reproduce from original evidence")
+    return {"selected_result_count": len(epochs), "selected_epochs": epochs,
+            "median_selected_epochs": float(statistics.median(epochs)), "fixed_epochs": derived,
+            "rule": "ceil(median(all81 selected architecture cell/fold/seed stopping epochs))"}
 
 
 def _check_beta_zero(attempt, job, result, data):
@@ -123,13 +144,16 @@ def _load_historical(original_directory, l1_directory):
             or l1_summary["new_successful_tree_fit_count"] != 216):
         raise ValueError("Historical L1 completed summary is inconsistent")
     chosen = original_summary["selections"]
-    if chosen["ridge"]["selection"]["selected"]["candidate_id"] != "ridge-a1000":
-        raise ValueError("Original standalone ridge selection changed")
+    if (chosen["ridge"]["selection"]["selected"]["candidate_id"] != "ridge-a1000"
+            or chosen["lstm"]["selection"]["selected"]["candidate_id"] != LSTM_ID
+            or chosen["lstm"]["selection"]["fixed_epochs"] != common.FIXED["lstm_epochs"]):
+        raise ValueError("Original standalone ridge or LSTM selection changed")
     cells = sorted(TUNING_CELLS)
     data = {cell: original_runner.load_series(original, original_plan, cell) for cell in cells}
     base, tree_rows, selected_lstm, ledger = defaultdict(dict), {}, {}, {}
     for job in original_plan["jobs"]:
-        include = (job["stage"] == "direct" or job["candidate_id"] == "ridge-a1000")
+        include = (job["stage"] in ("baselines", "direct")
+                   or job["candidate_id"] in ("ridge-a1000", LSTM_ID))
         if not include:
             continue
         attempt = _success(original, job, PLAN_SHA256)
@@ -142,8 +166,10 @@ def _load_historical(original_directory, l1_directory):
         if job["stage"] == "direct":
             tree_rows[("l2", job["parameters"]["trees"], job["parameters"]["leaves"], *key)] = raw
         else:
-            method = "ridge"
+            method = "ridge" if job["stage"] == "ridge" else "lstm" if job["stage"] == "lstm" else job["method"]
             base[method].setdefault(key, {})[str(job["seed"])] = raw
+        if job["stage"] == "lstm":
+            selected_lstm[job["id"]] = _read_json(attempt / "result.json")
     epochs = derive_fixed_epochs(original_plan["jobs"], selected_lstm)
     beta_zero_ledger = {}
     for job in l1_plan["jobs"]:

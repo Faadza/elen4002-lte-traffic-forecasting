@@ -15,6 +15,45 @@ from forecasting.development_plan import FOLDS, TUNING_CELLS
 from tools.development_store import _inventory, _read_json, sha256
 
 
+def lstm_records():
+    jobs, results = [], {}
+    for cell in TUNING_CELLS:
+        for fold in range(3):
+            for seed in common.FIXED["seeds"]:
+                job = {"id": f"lstm-h32-d0p2--{cell}--f{fold+1}--s{seed}",
+                       "stage": "lstm", "candidate_id": "lstm-h32-d0p2",
+                       "cell": cell, "fold_index": fold, "seed": seed}
+                jobs.append(job)
+                results[job["id"]] = {"job": job, "training": {"selected_epochs": 23}}
+    return jobs, results
+
+
+def test_fixed_epochs_rederived_from_all81_evidence_records():
+    jobs, results = lstm_records()
+    result = evidence.derive_fixed_epochs(jobs, results)
+    assert result["selected_result_count"] == 81
+    assert result["fixed_epochs"] == 23
+    assert result["median_selected_epochs"] == 23
+
+
+@pytest.mark.parametrize("bad", ["missing", "duplicate", "wrong_seed", "wrong_epoch", "bool_epoch"])
+def test_fixed_epochs_fail_on_incomplete_or_changed_evidence(bad):
+    jobs, results = lstm_records()
+    if bad == "missing":
+        results.pop(jobs[0]["id"])
+    elif bad == "duplicate":
+        jobs.append(copy.deepcopy(jobs[0]))
+    elif bad == "wrong_seed":
+        jobs[0]["seed"] = 99
+    elif bad == "wrong_epoch":
+        for value in results.values():
+            value["training"]["selected_epochs"] = 24
+    else:
+        results[jobs[0]["id"]]["training"]["selected_epochs"] = True
+    with pytest.raises(ValueError):
+        evidence.derive_fixed_epochs(jobs, results)
+
+
 def beta_zero_fixture(monkeypatch):
     import l1_revision.model as model
     traffic = np.arange(1, 225, dtype=float)
