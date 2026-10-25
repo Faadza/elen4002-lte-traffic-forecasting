@@ -1,0 +1,56 @@
+field,value
+study_id,independent_l1_l2_2026_10_09
+scope,frozen matched L1/L2 independent ensembles and seven standalones
+period,final
+original_repository,https://github.com/Faadza/elen4002-traffic-forecasting
+original_commit,19d19291d7e58dabb1f72436c0a3c68a49eb321b
+final_summary_sha256,a9dff2f876ccb10ae39de6776b130189a3ff699090dcf045498c0a557983e31e
+final_plan_sha256,8c5385a3db8e2ccf2441d3d1a1e7c0bb5c656b609a39f6d30f5352c6347ff184
+final_validation_summary_sha256,8733cbbc84e03785d0fbc84c13f383f149e27f0922cc02db76cb7b85fdd2e8c6
+primary_model,ensemble_l1_r0p1
+primary_comparator,lightgbm_l1
+final_settings_retuned,False
+cells,57
+conditions,11
+forecast_horizon_hours,1
+final_start,2018-08-29 06:00:00
+final_end,2018-10-22 23:00:00
+time_origin,2017-10-23T00:00:00
+timestamp_timezone,Dataset timestamps have no stated timezone; no timezone conversion applied.
+traffic_units,Original dataset traffic units. Physical calibration is unverified.
+MASE_units,Dimensionless. Divide cell MAE by its frozen prefix weekly-naive scale.
+macro_aggregation,Average each metric equally across cells; macro RMSE is the mean of cell RMSEs.
+lstm_aggregation,"Score each seed separately, then average metrics over seeds within each cell. Do not average predictions into an ensemble."
+scored_targets,74474
+prediction_rows_including_methods_and_seeds,968162
+prediction_files,741
+lstm_seeds,"2026,2027,2028"
+prediction_raw,Traffic-unit output before nonnegative clipping.
+prediction,"max(prediction_raw, 0). Use this column for reported error metrics."
+missing_values,Blank means unavailable or not applicable. Baselines have no fitted training-time observations; blanks are not zero.
+seed_blank,"Deterministic method, not an omitted LSTM seed."
+sensitivity_mask,Use sensitivity_eligible from target-cohorts.csv for the 29004 scored sensitivity targets. fully_observed_history checks the preceding 168 hours only and can include a missing target.
+timing_units,seconds in observation CSVs; microseconds and milliseconds only where named in cost.csv.
+memory_units,bytes in observation CSVs; MiB in cost.csv means bytes divided by 1048576.
+memory_scope,"Total worker-process peak RSS, including dependencies and data; not incremental model-only memory."
+timing_p95,"Descriptive empirical linear quantile, not a confidence interval."
+fit_observations,Three repeats for fitted deterministic methods; three separate seeds for LSTM.
+prediction_observations,"Repeat 1 for deterministic methods and all three separate LSTM seeds, with three timed passes."
+latency_scope,Single-origin samples use 100 common origins. Batch sizes vary by cell but match across methods and seeds.
+deployment_size,"One complete saved model per cell; repeat 1 or representative LSTM seed, as labelled."
+uncertainty_scope,approximate_conditional_interval_not_a_success_gate
+comparison_sign,absolute_difference is candidate minus comparator; negative means lower candidate error.
+ridge_weight,Ensemble weight on Ridge. Remaining weight is on the indicated LightGBM model.
+historical_context,stage-comparison.csv and development-weight-grid.csv retain development/confirmation context. Raw predictions cover the final period only.
+cross_period_comparison,MASE denominators and cohorts differ by period; stage values are not same-cohort paired comparisons.
+scope_exclusions,"Earlier residual-hybrid searches, full training data, fitted models, runtime logs and figures are outside this final-results CSV package."
+provenance,Seven published CSVs and 741 accepted prediction CSVs are unchanged. Other result CSVs flatten saved summary values or saved final-calendar masks without new model runs.
+manifest,"manifest.csv lists every other CSV, including its source and SHA-256. It excludes itself to avoid a recursive hash."
+diagnostic_columns,"Double underscores separate original nested field names, for example fully_observed_history__scores__MAE."
+limitation_1,Protocol amendment made after adaptive development
+limitation_2,Primary condition selected only on development; an endpoint is not a successful mixture
+limitation_3,All fixed equal-weight and selected-weight conditions reported; no holdout redesign
+limitation_4,Confirmation selects only the standalone comparator; final does not select a new primary
+limitation_5,Runtime is not an energy measurement or LTE packet latency
+limitation_6,Conditional calendar-block intervals over a short final period; no guaranteed coverage
+percentage_sign,matched-comparisons.csv uses positive percent_reduction for improvement. primary-comparisons.csv uses negative percentage_difference_vs_comparator for improvement.

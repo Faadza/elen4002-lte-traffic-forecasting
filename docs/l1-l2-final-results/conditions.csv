@@ -1,0 +1,12 @@
+id,kind,leaves,objective,ridge_weight,trees
+persistence,baseline,,,,
+daily_seasonal_naive,baseline,,,,
+weekly_seasonal_naive,baseline,,,,
+ridge,ridge,,,1.0,
+lightgbm_l2,direct,7,l2,0.0,128
+lightgbm_l1,direct,31,l1,0.0,512
+lstm,lstm,,,,
+ensemble_l2_r0p5,blend,7,l2,0.5,128
+ensemble_l1_r0p5,blend,31,l1,0.5,512
+ensemble_l2_r0p2,blend,7,l2,0.2,128
+ensemble_l1_r0p1,blend,31,l1,0.1,512

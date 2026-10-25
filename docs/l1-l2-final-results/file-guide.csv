@@ -1,0 +1,25 @@
+file,purpose
+accuracy.csv,Eleven equally weighted cell-average accuracy and sensitivity results.
+cost.csv,"Eleven model-level fit, latency, memory and deployment summaries."
+per-cell-accuracy.csv,627 model-cell scores and target coverage records.
+lstm-seed-scores.csv,171 separate LSTM seed-cell scores.
+matched-comparisons.csv,"Four hybrids compared with their matched LightGBM component, for three metrics."
+development-weight-grid.csv,Development-only weight grid; not extra final evaluations.
+stage-comparison.csv,"Development, confirmation and final scores, with period-specific cohorts and scales."
+predictions/*/*.csv,Unchanged accepted forecasts; join to target-cohorts.csv on cell and target_index.
+prediction-index.csv,"Prediction file identities, row counts and accepted record hashes."
+conditions.csv,"Frozen model condition IDs, objectives and Ridge weights."
+cell-diagnostics.csv,"Full saved cell-level metrics, coverage, clipping, peak-day and fully-observed sensitivity results."
+seed-diagnostics.csv,"Saved seed-level scores, clipping, peak-day and fully-observed sensitivity results."
+uncertainty.csv,Saved conditional block-bootstrap intervals for the frozen primary comparison.
+primary-comparisons.csv,"Saved primary-model comparisons against every final condition, including the zero self-comparison."
+primary-cell-differences.csv,Cell-level error differences behind primary comparisons.
+fit-observations.csv,Individual complete-model fit times and process peak RSS.
+prediction-observations.csv,"Prediction workload counts and process peak RSS per model, cell and seed/repeat."
+timing-samples.csv,Every saved batch and single-origin timing sample; pass numbers start at one.
+deployed-artifacts.csv,"Representative deployed model bytes per cell, and fit applicability."
+panel-fit-observations.csv,Whole-panel sum of cell fit times for each repeat or seed.
+target-cohorts.csv,"Final hourly calendar, genuine observation and eligibility masks, and fully-observed-history membership."
+metadata.csv,"Units, aggregation rules, provenance and interpretation limits."
+manifest.csv,"SHA-256, bytes, rows and source identity for every CSV other than the manifest itself."
+file-guide.csv,Purpose of each CSV or prediction-file pattern.
